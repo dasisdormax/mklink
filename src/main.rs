@@ -135,7 +135,6 @@ fn listen() -> ! {
                 continue;
             }
         };
-        eprintln!("{} -> {}", link, target);
         symlink(link.as_str(), target.as_str(), is_dir);
     }
     exit(1)
