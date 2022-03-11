@@ -1,6 +1,7 @@
 mod args;
 
 use std::ffi::{OsString, OsStr, c_void};
+use std::io;
 use std::os::windows::prelude::*;
 use std::iter::once;
 use std::process::exit;
@@ -17,14 +18,13 @@ const SYMBOLIC_LINK_FLAG_FILE: u32 = 0x0;
 const SYMBOLIC_LINK_FLAG_DIRECTORY: u32 = 0x1;
 const SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE: u32 = 0x2;
 
-fn main() {
-    let args = args::Args::parse();
-    let symlink_file_name: Vec<u16> = to_unicode(args.get_link());
-    let target_file_name = to_unicode(args.get_target());
+fn symlink(link: &str, target: &str, is_dir: bool) {
+    let symlink_file_name: Vec<u16> = to_unicode(link);
+    let target_file_name = to_unicode(target);
 
     let mut flags = 0u32;
     flags |= SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
-    flags |= if args.is_directory() {
+    flags |= if is_dir {
         SYMBOLIC_LINK_FLAG_DIRECTORY
     } else {
         SYMBOLIC_LINK_FLAG_FILE
@@ -57,4 +57,88 @@ fn main() {
     let s = msg.to_str().unwrap();
     eprint!("{}", s);
     exit(1);
+}
+
+fn decode_line(line: &str) -> Vec<String> {
+    let mut args = Vec::<String>::new();
+    let mut current = String::new();
+    let mut curr_quote = ' ';
+    let mut is_backslashed= false;
+    let mut is_word = false;
+    for c in line.chars() {
+        if c.is_whitespace() && curr_quote == ' ' {
+            if is_word {
+                args.push(current.clone());
+                current.clear();
+                is_word = false;
+            }
+            continue;
+        }
+        is_word = true;
+        if curr_quote == c {
+            curr_quote = ' ';
+            continue;
+        }
+        match c {
+            '\''|'"' => {
+                if curr_quote == ' ' && !is_backslashed {
+                    curr_quote = c;
+                    continue;
+                }
+            }
+            '\\' => {
+                if !is_backslashed {
+                    is_backslashed = true;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        current.push(c);
+        is_backslashed = false;
+    }
+    if is_word {
+        args.push(current.clone());
+        current.clear();
+    }
+    args
+}
+
+fn listen() -> ! {
+    let mut line = String::new();
+    while let Ok(bytes) = io::stdin().read_line(&mut line) {
+        if bytes == 0 {
+            exit(0);
+        }
+        let args = decode_line(line.as_str());
+        line.clear();
+
+        let mut ia = args.iter();
+        if args.len() < 3 {
+            eprintln!("Usage: mklink [-d | /D] <LINK> <TARGET>");
+            continue;
+        }
+        ia.next().unwrap();
+        let mut link: &String = ia.next().unwrap();
+        let is_dir = link == "-d" || link.eq_ignore_ascii_case("/d");
+        if is_dir {
+            link = ia.next().unwrap();
+        }
+        let target = match ia.next() {
+            Some(x) => x,
+            None => {
+                eprintln!("Usage: mklink [-d | /D] <LINK> <TARGET>");
+                continue;
+            }
+        };
+        symlink(link.as_str(), target.as_str(), is_dir);
+    }
+    exit(1)
+}
+
+fn main() {
+    let args = args::Args::parse();
+    let link = args.get_link().unwrap_or_else(|| listen());
+    let target = args.get_target().unwrap();
+    symlink(link, target, args.is_directory())
 }
